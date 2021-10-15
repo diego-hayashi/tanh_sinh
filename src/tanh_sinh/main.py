@@ -1,11 +1,22 @@
-import math
+from __future__ import annotations
 
-import numpy
+import math
+from types import ModuleType
+from typing import Callable
+
+import numpy as np
 import scipy.special
 from mpmath import mp
 
 
-def integrate(f, a, b, eps, max_steps=10, f_derivatives=None, mode="numpy"):
+def integrate(
+    f: Callable | tuple[Callable, Callable, Callable],
+    a: float,
+    b: float,
+    eps: float,
+    max_steps: int = 10,
+    mode: str = "numpy",
+):
     """Integrate a function `f` between `a` and `b` with accuracy `eps`.
 
     For more details, see
@@ -23,20 +34,29 @@ def integrate(f, a, b, eps, max_steps=10, f_derivatives=None, mode="numpy"):
     doi:10.2977/prims/1145474600,
     <http://www.kurims.kyoto-u.ac.jp/~okamoto/paper/Publ_RIMS_DE/41-4-38.pdf>.
     """
-    if f_derivatives is None:
-        f_derivatives = {}
+    if callable(f):
 
-    f_left = {0: lambda s: f(a + s)}
-    if 1 in f_derivatives:
-        f_left[1] = lambda s: f_derivatives[1](a + s)
-    if 2 in f_derivatives:
-        f_left[2] = lambda s: f_derivatives[2](a + s)
+        def f_left_c(s):
+            return f(a + s)
 
-    f_right = {0: lambda s: f(b - s)}
-    if 1 in f_derivatives:
-        f_right[1] = lambda s: -f_derivatives[1](b - s)
-    if 2 in f_derivatives:
-        f_right[2] = lambda s: +f_derivatives[2](b - s)
+        def f_right_c(s):
+            return f(b - s)
+
+        f_left = f_left_c
+        f_right = f_right_c
+
+    else:
+        assert len(f) == 3
+        f_left = (
+            lambda s: f[0](a + s),
+            lambda s: f[1](a + s),
+            lambda s: f[2](a + s),
+        )
+        f_right = (
+            lambda s: +f[0](b - s),
+            lambda s: -f[1](b - s),
+            lambda s: +f[2](b - s),
+        )
 
     value_estimate, error_estimate = integrate_lr(
         f_left, f_right, b - a, eps, max_steps=max_steps, mode=mode
@@ -44,7 +64,14 @@ def integrate(f, a, b, eps, max_steps=10, f_derivatives=None, mode="numpy"):
     return value_estimate, error_estimate
 
 
-def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
+def integrate_lr(
+    f_left: Callable | tuple[Callable, Callable, Callable],
+    f_right: Callable | tuple[Callable, Callable, Callable],
+    alpha: float,
+    eps: float,
+    max_steps: int = 10,
+    mode: str = "numpy",
+):
     """Integrate a function `f` between `a` and `b` with accuracy `eps`. The function
     `f` is given in terms of two functions
 
@@ -75,14 +102,16 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
         fsum = mp.fsum
     else:
         assert mode == "numpy"
-        kernel = numpy
+        kernel = np
 
-        def lambertw(x, k):
+        def lambertw_scipy(x, k):
             out = scipy.special.lambertw(x, k)
             assert abs(out.imag) < 1.0e-15
             return scipy.special.lambertw(x, k).real
 
-        ln = numpy.log
+        lambertw = lambertw_scipy
+
+        ln = np.log
         fsum = math.fsum
 
     alpha2 = alpha / 2
@@ -128,12 +157,18 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
         if num_digits_orig < num_digits:
             mp.dps = num_digits
 
-    h = _solve_expx_x_logx(eps ** 2, tol, kernel, ln)
+        h = _solve_expx_x_logx(eps ** 2, tol, kernel, ln)
 
-    if mode == "mpmath":
         mp.dps = num_digits_orig
+    else:
+        h = _solve_expx_x_logx(eps ** 2, tol, kernel, ln)
 
     last_error_estimate = None
+    error_estimate = None
+    value_estimates = None
+
+    fun_left = f_left if callable(f_left) else f_left[0]
+    fun_right = f_right if callable(f_right) else f_right[0]
 
     success = False
     for level in range(max_steps + 1):
@@ -181,23 +216,23 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
         if level == 0:
             t = [0]
         else:
-            t = h * numpy.arange(1, j + 1, 2)
+            t = h * np.arange(1, j + 1, 2)
 
         if mode == "mpmath":
-            sinh_t = mp.pi / 2 * numpy.array(list(map(mp.sinh, t)))
-            cosh_t = mp.pi / 2 * numpy.array(list(map(mp.cosh, t)))
-            cosh_sinh_t = numpy.array(list(map(mp.cosh, sinh_t)))
+            sinh_t = mp.pi / 2 * np.array(list(map(mp.sinh, t)))
+            cosh_t = mp.pi / 2 * np.array(list(map(mp.cosh, t)))
+            cosh_sinh_t = np.array(list(map(mp.cosh, sinh_t)))
             # y = alpha/2 * (1 - x)
             # x = [mp.tanh(v) for v in u2]
-            exp_sinh_t = numpy.array(list(map(mp.exp, sinh_t)))
+            exp_sinh_t = np.array(list(map(mp.exp, sinh_t)))
         else:
             assert mode == "numpy"
-            sinh_t = numpy.pi / 2 * numpy.sinh(t)
-            cosh_t = numpy.pi / 2 * numpy.cosh(t)
-            cosh_sinh_t = numpy.cosh(sinh_t)
+            sinh_t = np.pi / 2 * np.sinh(t)
+            cosh_t = np.pi / 2 * np.cosh(t)
+            cosh_sinh_t = np.cosh(sinh_t)
             # y = alpha/2 * (1 - x)
             # x = [mp.tanh(v) for v in u2]
-            exp_sinh_t = numpy.exp(sinh_t)
+            exp_sinh_t = np.exp(sinh_t)
 
         y0 = alpha2 / exp_sinh_t / cosh_sinh_t
         y1 = -alpha2 * cosh_t / cosh_sinh_t ** 2
@@ -205,12 +240,12 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
         weights = -h * y1
 
         if mode == "mpmath":
-            fly = numpy.array([f_left[0](yy) for yy in y0])
-            fry = numpy.array([f_right[0](yy) for yy in y0])
+            fly = np.array([fun_left(yy) for yy in y0])
+            fry = np.array([fun_right(yy) for yy in y0])
         else:
             assert mode == "numpy"
-            fly = f_left[0](y0)
-            fry = f_right[0](y0)
+            fly = fun_left(y0)
+            fry = fun_right(y0)
 
         lsummands = fly * weights
         rsummands = fry * weights
@@ -221,6 +256,7 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
             # f_left and f_right are equal here. Deliberately take lsummands here.
             value_estimates = list(lsummands)
         else:
+            assert value_estimates is not None
             value_estimates.append(
                 # Take the estimation from the previous step and half the step size.
                 # Fill the gaps with the sum of the values of the current step.
@@ -230,8 +266,11 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
             )
 
         # error estimation
-        if 1 in f_left and 2 in f_left:
-            assert 1 in f_right and 2 in f_right
+        if callable(f_left):
+            error_estimate = _error_estimate2(
+                eps, value_estimates, lsummands, rsummands
+            )
+        else:
             error_estimate = _error_estimate1(
                 h,
                 sinh_t,
@@ -248,10 +287,6 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
                 mode,
             )
             last_error_estimate = error_estimate
-        else:
-            error_estimate = _error_estimate2(
-                eps, value_estimates, lsummands, rsummands
-            )
 
         if abs(error_estimate) < eps:
             success = True
@@ -260,6 +295,7 @@ def integrate_lr(f_left, f_right, alpha, eps, max_steps=10, mode="numpy"):
         h /= 2
 
     assert success
+    assert value_estimates is not None
     return value_estimates[-1], error_estimate
 
 
@@ -272,11 +308,11 @@ def _error_estimate1(
     y1,
     fly,
     fry,
-    f_left,
-    f_right,
-    alpha,
-    last_estimate,
-    mode,
+    f_left: tuple[Callable, Callable, Callable],
+    f_right: tuple[Callable, Callable, Callable],
+    alpha: float,
+    last_estimate: float | None,
+    mode: str,
 ):
     """
     A pretty accurate error estimation is
@@ -291,10 +327,10 @@ def _error_estimate1(
     alpha2 = alpha / 2
 
     if mode == "mpmath":
-        sinh_sinh_t = numpy.array(list(map(mp.sinh, sinh_t)))
+        sinh_sinh_t = np.array(list(map(mp.sinh, sinh_t)))
     else:
         assert mode == "numpy"
-        sinh_sinh_t = numpy.sinh(sinh_t)
+        sinh_sinh_t = np.sinh(sinh_t)
 
     tanh_sinh_t = sinh_sinh_t / cosh_sinh_t
 
@@ -314,10 +350,10 @@ def _error_estimate1(
     )
 
     if mode == "mpmath":
-        fl1_y = numpy.array([f_left[1](yy) for yy in y0])
-        fl2_y = numpy.array([f_left[2](yy) for yy in y0])
-        fr1_y = numpy.array([f_right[1](yy) for yy in y0])
-        fr2_y = numpy.array([f_right[2](yy) for yy in y0])
+        fl1_y = np.array([f_left[1](yy) for yy in y0])
+        fl2_y = np.array([f_left[2](yy) for yy in y0])
+        fr1_y = np.array([f_right[1](yy) for yy in y0])
+        fr2_y = np.array([f_right[2](yy) for yy in y0])
     else:
         assert mode == "numpy"
         fl1_y = f_left[1](y0)
@@ -326,7 +362,7 @@ def _error_estimate1(
         fr2_y = f_right[2](y0)
 
     # Second derivative of F(t) = f(g(t)) * g'(t).
-    summands = numpy.concatenate(
+    summands = np.concatenate(
         [
             y3 * fly + 3 * y1 * y2 * fl1_y + y1 ** 3 * fl2_y,
             y3 * fry + 3 * y1 * y2 * fr1_y + y1 ** 3 * fr2_y,
@@ -351,7 +387,7 @@ def _error_estimate1(
     return out
 
 
-def _error_estimate2(eps, value_estimates, left_summands, right_summands):
+def _error_estimate2(eps: float, value_estimates, left_summands, right_summands):
     # "less formal" error estimation after Bailey,
     # <https://www.davidhbailey.com/dhbpapers/dhb-tanh-sinh.pdf>
     if len(value_estimates) < 3:
@@ -374,7 +410,9 @@ def _error_estimate2(eps, value_estimates, left_summands, right_summands):
     return error_estimate
 
 
-def _solve_expx_x_logx(tau, tol, kernel, ln, max_steps=10):
+def _solve_expx_x_logx(
+    tau: float, tol: float, kernel: ModuleType, ln, max_steps: int = 10
+):
     """Solves the equation
 
     log(pi/tau) = pi/2 * exp(x) - x - log(x)
